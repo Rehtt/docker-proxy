@@ -72,17 +72,18 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if want, lvl := pullAccessLog(req.URL.Path, req.Method); want {
 		ctx := req.Context()
 		if slog.Default().Enabled(ctx, lvl) {
+			client := ClientIP(req)
 			args := []any{
 				"method", req.Method,
 				"path", req.URL.Path,
 				"host", req.Host,
-				"remote", req.RemoteAddr,
+				"remote", client,
 				"status", rec.status,
 				"duration_ms", time.Since(start).Milliseconds(),
 				"upstream_host", up.Host,
 			}
-			if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
-				args = append(args, "forwarded", strings.TrimSpace(strings.Split(xff, ",")[0]))
+			if peer := remoteTCPHost(req.RemoteAddr); peer != client {
+				args = append(args, "peer", req.RemoteAddr)
 			}
 			slog.Log(ctx, lvl, "registry_request", args...)
 		}

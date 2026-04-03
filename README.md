@@ -1,7 +1,7 @@
 # docker-proxy
 
 [![License: MIT](LICENSE)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 
 **仓库：** [github.com/Rehtt/docker-proxy](https://github.com/Rehtt/docker-proxy)
 
@@ -54,7 +54,7 @@ Typical use cases: internal mirrors behind your own DNS/TLS names, or unifying m
 
 ### 环境要求
 
-- Go 版本以 `go.mod` 中 `go` 指令为准（当前为 **1.24**）
+- Go 版本以 `go.mod` 中 `go` 指令为准（当前为 **1.26.1**）
 - 访问上游 registry 的网络（通常需 HTTPS）
 
 ### 快速开始
@@ -178,6 +178,10 @@ docker pull hub.example.com:8080/library/nginx:latest
 ```bash
 docker pull hub.example.com/library/nginx:latest
 ```
+
+### 网关 / 反向代理
+
+前面有 Nginx、Traefik 等网关时，`registry_request` 访问日志里的 **`remote` 会尽量反映真实客户端**：依次参考 `X-Real-IP`、`X-Forwarded-For`（取链上最左侧客户端）、`Forwarded`（RFC 7239 的首个 `for=`）；均无时仍用 TCP 对端地址。若解析结果与直连地址不同，会额外记录 **`peer`**（网关看到的 TCP `RemoteAddr`）。请在**仅经由可信网关暴露**时使用上述头；若服务直接对公网开放，上游若伪造这些头会误导日志。
 
 ### Makefile 目标
 
