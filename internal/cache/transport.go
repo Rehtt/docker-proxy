@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -93,11 +94,13 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, nil
 	}
 	tmpPath := tmp.Name()
-	tee := io.TeeReader(orig, tmp)
+	bufw := bufio.NewWriterSize(tmp, 1<<20)
+	tee := io.TeeReader(orig, bufw)
 	resp.Body = &teeReadCloser{
 		Reader:   tee,
 		upstream: orig,
 		file:     tmp,
+		buf:      bufw,
 		tmpPath:  tmpPath,
 		objDir:   objDir,
 		t:        t,
@@ -129,6 +132,7 @@ type teeReadCloser struct {
 	io.Reader
 	upstream io.ReadCloser
 	file     *os.File
+	buf      *bufio.Writer
 	tmpPath  string
 	objDir   string
 	t        *transport
@@ -142,11 +146,18 @@ func (t *teeReadCloser) Read(p []byte) (int, error) {
 
 func (t *teeReadCloser) Close() error {
 	errUp := t.upstream.Close()
-	errF := t.file.Close()
 	if errUp != nil {
+		_ = t.buf.Flush()
+		_ = t.file.Close()
 		_ = os.Remove(t.tmpPath)
 		return errUp
 	}
+	if err := t.buf.Flush(); err != nil {
+		_ = t.file.Close()
+		_ = os.Remove(t.tmpPath)
+		return err
+	}
+	errF := t.file.Close()
 	if errF != nil {
 		_ = os.Remove(t.tmpPath)
 		return errF

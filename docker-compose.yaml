@@ -10,4 +10,8 @@ services:
       - "8080:8080"
     volumes:
       - ./config.yaml:/etc/docker-proxy/config.yaml:ro
-      - ./cache:/cache # 需配合 config 中 cache.dir: /cache
+      # 命名卷落在 Docker/本机文件系统，首拉写缓存时比绑定宿主机目录（尤其 WSL2）快得多
+      - docker-proxy-cache:/cache
+
+volumes:
+  docker-proxy-cache:

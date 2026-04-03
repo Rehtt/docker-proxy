@@ -116,11 +116,13 @@ make compose-logs
 make compose-down
 ```
 
-镜像默认监听容器内 `8080`，配置文件挂载为只读：`./config.yaml` → `/etc/docker-proxy/config.yaml`。若使用下方缓存目录挂载，请在配置里将 `cache.dir` 设为容器内路径（例如 `/cache`）。
+镜像默认监听容器内 `8080`，配置文件挂载为只读：`./config.yaml` → `/etc/docker-proxy/config.yaml`。Compose 默认将缓存放在**命名卷** `docker-proxy-cache` → 容器内 `/cache`；请在配置里将 `cache.dir` 设为该路径（例如 `/cache`）。若改用绑定挂载（如 `./cache:/cache`），在 Docker Desktop / WSL2 等环境下首次拉取写盘可能明显变慢，建议优先保留命名卷或将缓存目录放到本地快盘。
 
 ### 镜像缓存
 
 对上游 Registry 的 **`GET`/`HEAD`**，且路径为 `/v2/.../blobs/...` 或 `/v2/.../manifests/...` 的响应，可按配置写入本地磁盘；**默认保留 3 天**（按文件 `meta` 的修改时间判断，到期后定期清理）。不缓存带 `Range` 的请求或 `Content-Encoding` 非 identity 的响应。
+
+**性能说明**：缓存**未命中**时会边转发边写盘，吞吐受缓存目录 I/O 影响较大；**命中**后多从本地读取。若感到「开缓存首拉变慢」，请避免在跨系统绑定挂载目录上存放缓存（见上文 Compose 命名卷建议）。
 
 配置示例：
 
