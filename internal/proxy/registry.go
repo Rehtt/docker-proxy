@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"crypto/tls"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -64,7 +65,79 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	proxy := r.reverseProxyFor(up)
-	proxy.ServeHTTP(w, req)
+	start := time.Now()
+	rec := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
+	proxy.ServeHTTP(rec, req)
+
+	if want, lvl := pullAccessLog(req.URL.Path, req.Method); want {
+		ctx := req.Context()
+		if slog.Default().Enabled(ctx, lvl) {
+			args := []any{
+				"method", req.Method,
+				"path", req.URL.Path,
+				"host", req.Host,
+				"remote", req.RemoteAddr,
+				"status", rec.status,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"upstream_host", up.Host,
+			}
+			if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
+				args = append(args, "forwarded", strings.TrimSpace(strings.Split(xff, ",")[0]))
+			}
+			slog.Log(ctx, lvl, "registry_request", args...)
+		}
+	}
+}
+
+type responseRecorder struct {
+	http.ResponseWriter
+	status  int
+	written bool
+}
+
+func (rr *responseRecorder) WriteHeader(code int) {
+	if rr.written {
+		return
+	}
+	rr.status = code
+	rr.written = true
+	rr.ResponseWriter.WriteHeader(code)
+}
+
+func (rr *responseRecorder) Write(b []byte) (int, error) {
+	if !rr.written {
+		rr.status = http.StatusOK
+		rr.written = true
+	}
+	return rr.ResponseWriter.Write(b)
+}
+
+func (rr *responseRecorder) Flush() {
+	if f, ok := rr.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (rr *responseRecorder) Unwrap() http.ResponseWriter {
+	return rr.ResponseWriter
+}
+
+func pullAccessLog(path, method string) (bool, slog.Level) {
+	if !strings.HasPrefix(path, "/v2/") {
+		return false, 0
+	}
+	switch strings.ToUpper(method) {
+	case http.MethodGet, http.MethodHead:
+	default:
+		return false, 0
+	}
+	if strings.Contains(path, "/manifests/") {
+		return true, slog.LevelInfo
+	}
+	if strings.Contains(path, "/blobs/") {
+		return true, slog.LevelDebug
+	}
+	return true, slog.LevelDebug
 }
 
 func (r *Registry) reverseProxyFor(target *url.URL) *httputil.ReverseProxy {
@@ -105,6 +178,9 @@ func (r *Registry) newSingleHostReverseProxy(target *url.URL) *httputil.ReverseP
 		tr = cache.NewTransport(base, cache.Options{
 			Dir: filepathJoinPerHost(r.cacheDir, target.Host),
 			TTL: r.cacheTTL,
+			OnError: func(e error) {
+				slog.Warn("cache", "err", e)
+			},
 		})
 	}
 	return &httputil.ReverseProxy{

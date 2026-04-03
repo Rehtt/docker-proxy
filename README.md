@@ -148,6 +148,7 @@ cache:
 | `-key` | （空） | TLS 私钥路径 |
 | `-cache-dir` | （空） | 缓存根目录，非空则启用并覆盖配置中的 `cache.dir` |
 | `-cache-ttl-days` | `-1` | 缓存保留天数；`-1` 表示使用配置；仅 `-cache-dir` 时默认 3 天 |
+| `-log-level` | （空） | 日志等级，覆盖配置：`debug` / `info` / `warn` / `error` |
 
 运行 `docker-proxy -h` 可查看内置帮助。
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,18 +22,33 @@ func main() {
 	keyFile := flag.String("key", "", "TLS 私钥")
 	cacheDir := flag.String("cache-dir", "", "镜像缓存目录（非空则启用，覆盖配置中的 cache.dir）")
 	cacheTTLDays := flag.Int("cache-ttl-days", -1, "缓存保留天数，默认 3；-1 表示使用配置文件")
+	logLevel := flag.String("log-level", "", "日志等级，覆盖配置：debug|info|warn|error")
 	flag.Parse()
 
-	routes, ccfg, err := config.Load(*configPath)
+	app, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
+		os.Exit(1)
 	}
+
+	logCfg := app.Log
+	if *logLevel != "" {
+		logCfg = config.LogConfig{Level: *logLevel}
+	}
+	slvl, err := logCfg.SlogLevel()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "log level: %v\n", err)
+		os.Exit(1)
+	}
+	var lv slog.LevelVar
+	lv.Set(slvl)
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: &lv})))
 
 	cacheRoot := ""
 	var cacheTTL time.Duration
-	if ccfg != nil {
-		cacheRoot = ccfg.Dir
-		cacheTTL = ccfg.TTL()
+	if app.Cache != nil {
+		cacheRoot = app.Cache.Dir
+		cacheTTL = app.Cache.TTL()
 	}
 	if *cacheDir != "" {
 		cacheRoot = *cacheDir
@@ -49,22 +64,25 @@ func main() {
 	}
 
 	m := make(map[string]*url.URL)
-	for _, rt := range routes {
+	for _, rt := range app.Routes {
 		u, err := url.Parse(rt.Upstream)
 		if err != nil {
-			log.Fatalf("upstream %q: %v", rt.Upstream, err)
+			slog.Error("upstream", "upstream", rt.Upstream, "err", err)
+			os.Exit(1)
 		}
 		if _, dup := m[rt.Host]; dup {
-			log.Fatalf("duplicate host: %s", rt.Host)
+			slog.Error("duplicate host", "host", rt.Host)
+			os.Exit(1)
 		}
 		m[rt.Host] = u
-		log.Printf("route %s -> %s", rt.Host, rt.Upstream)
+		slog.Info("route", "host", rt.Host, "upstream", rt.Upstream)
 	}
 	if cacheRoot != "" {
 		if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
-			log.Fatalf("cache dir: %v", err)
+			slog.Error("cache dir", "err", err)
+			os.Exit(1)
 		}
-		log.Printf("cache enabled: dir=%s ttl=%s", cacheRoot, cacheTTL)
+		slog.Info("cache enabled", "dir", cacheRoot, "ttl", cacheTTL.String())
 		cache.RunCleaner(context.Background(), cacheRoot, cacheTTL, time.Hour)
 	}
 
@@ -76,18 +94,21 @@ func main() {
 
 	if *certFile != "" || *keyFile != "" {
 		if *certFile == "" || *keyFile == "" {
-			log.Fatal("-cert and -key must be set together")
+			slog.Error("TLS", "msg", "-cert and -key must be set together")
+			os.Exit(1)
 		}
-		log.Printf("HTTPS listening on %s", *listen)
+		slog.Info("HTTPS listening", "addr", *listen)
 		if err := srv.ListenAndServeTLS(*certFile, *keyFile); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
+			slog.Error("server", "err", err)
+			os.Exit(1)
 		}
 		return
 	}
 
-	log.Printf("HTTP listening on %s", *listen)
+	slog.Info("HTTP listening", "addr", *listen)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+		slog.Error("server", "err", err)
+		os.Exit(1)
 	}
 }
 
@@ -108,6 +129,8 @@ Example config.yaml:
     enabled: true
     dir: ./cache
     ttl_days: 3
+  log:
+    level: info
 
 Docker daemon (/etc/docker/daemon.json), using HTTP mirror on port 8080:
   {

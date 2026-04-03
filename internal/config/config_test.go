@@ -20,11 +20,11 @@ cache:
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, c, err := Load(p)
+	app, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c != nil {
+	if app.Cache != nil {
 		t.Fatal("expected cache disabled")
 	}
 }
@@ -42,11 +42,30 @@ cache:
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, c, err := Load(p)
+	app, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c == nil || c.Dir != "./data" {
-		t.Fatalf("cache: %+v", c)
+	if app.Cache == nil || app.Cache.Dir != "./data" {
+		t.Fatalf("cache: %+v", app.Cache)
+	}
+}
+
+func TestLoad_invalidLogLevel(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "c.yaml")
+	content := `
+routes:
+  - host: a.example.com
+    upstream: https://registry-1.docker.io
+log:
+  level: noisy
+`
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected error")
 	}
 }

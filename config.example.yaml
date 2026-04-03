@@ -8,3 +8,6 @@ cache:
   enabled: true
   dir: ./cache
   ttl_days: 3
+
+log:
+  level: info
