@@ -12,12 +12,10 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/docker-proxy ./cmd/docker-proxy
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates \
-	&& adduser -D -H -u 65532 app
+RUN apk add --no-cache ca-certificates
 
 COPY --from=builder /out/docker-proxy /usr/local/bin/docker-proxy
 
-USER app
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/docker-proxy"]
