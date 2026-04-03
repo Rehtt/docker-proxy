@@ -1,0 +1,5 @@
+routes:
+  - host: hub.example.com
+    upstream: https://registry-1.docker.io
+  - host: ghcr.example.com
+    upstream: https://ghcr.io

@@ -1,0 +1,12 @@
+services:
+  docker-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: docker-proxy:latest
+    container_name: docker-proxy
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/etc/docker-proxy/config.yaml:ro
