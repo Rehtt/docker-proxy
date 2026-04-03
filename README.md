@@ -116,7 +116,27 @@ make compose-logs
 make compose-down
 ```
 
-镜像默认监听容器内 `8080`，配置文件挂载为只读：`./config.yaml` → `/etc/docker-proxy/config.yaml`。
+镜像默认监听容器内 `8080`，配置文件挂载为只读：`./config.yaml` → `/etc/docker-proxy/config.yaml`。若使用下方缓存目录挂载，请在配置里将 `cache.dir` 设为容器内路径（例如 `/cache`）。
+
+### 镜像缓存
+
+对上游 Registry 的 **`GET`/`HEAD`**，且路径为 `/v2/.../blobs/...` 或 `/v2/.../manifests/...` 的响应，可按配置写入本地磁盘；**默认保留 3 天**（按文件 `meta` 的修改时间判断，到期后定期清理）。不缓存带 `Range` 的请求或 `Content-Encoding` 非 identity 的响应。
+
+配置示例：
+
+- **`enabled`**：`true` 启用，`false` 关闭。省略时：只要配置了非空 **`dir`** 即视为启用（兼容旧配置）。
+- **`ttl_days`**：可省略；在已启用且未写天数时默认为 **3**。
+
+```yaml
+cache:
+  enabled: true
+  dir: ./cache
+  ttl_days: 3
+```
+
+关闭缓存可写 `enabled: false`（可保留 `dir` 便于日后打开）。仅写 `cache: {}` 或不写 `cache` 也表示不启用。
+
+命令行可覆盖：`-cache-dir`、`-cache-ttl-days`（`-1` 表示沿用配置文件中的天数）。
 
 ### 命令行参数
 
@@ -126,6 +146,8 @@ make compose-down
 | `-config` | `config.yaml` | 路由配置文件路径 |
 | `-cert` | （空） | TLS 证书路径；与 `-key` 同时设置则启用 HTTPS |
 | `-key` | （空） | TLS 私钥路径 |
+| `-cache-dir` | （空） | 缓存根目录，非空则启用并覆盖配置中的 `cache.dir` |
+| `-cache-ttl-days` | `-1` | 缓存保留天数；`-1` 表示使用配置；仅 `-cache-dir` 时默认 3 天 |
 
 运行 `docker-proxy -h` 可查看内置帮助。
 

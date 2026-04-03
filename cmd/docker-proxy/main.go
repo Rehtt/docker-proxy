@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"time"
 
+	"github.com/Rehtt/docker-proxy/internal/cache"
 	"github.com/Rehtt/docker-proxy/internal/config"
 	"github.com/Rehtt/docker-proxy/internal/proxy"
 )
@@ -17,11 +20,32 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "路由配置文件路径")
 	certFile := flag.String("cert", "", "TLS 证书（与 -key 同时设置则启用 HTTPS）")
 	keyFile := flag.String("key", "", "TLS 私钥")
+	cacheDir := flag.String("cache-dir", "", "镜像缓存目录（非空则启用，覆盖配置中的 cache.dir）")
+	cacheTTLDays := flag.Int("cache-ttl-days", -1, "缓存保留天数，默认 3；-1 表示使用配置文件")
 	flag.Parse()
 
-	routes, err := config.Load(*configPath)
+	routes, ccfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+
+	cacheRoot := ""
+	var cacheTTL time.Duration
+	if ccfg != nil {
+		cacheRoot = ccfg.Dir
+		cacheTTL = ccfg.TTL()
+	}
+	if *cacheDir != "" {
+		cacheRoot = *cacheDir
+		if *cacheTTLDays < 0 {
+			cacheTTL = 3 * 24 * time.Hour
+		}
+	}
+	if *cacheTTLDays >= 0 {
+		cacheTTL = time.Duration(*cacheTTLDays) * 24 * time.Hour
+	}
+	if cacheRoot != "" && cacheTTL <= 0 {
+		cacheTTL = 3 * 24 * time.Hour
 	}
 
 	m := make(map[string]*url.URL)
@@ -36,8 +60,15 @@ func main() {
 		m[rt.Host] = u
 		log.Printf("route %s -> %s", rt.Host, rt.Upstream)
 	}
+	if cacheRoot != "" {
+		if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+			log.Fatalf("cache dir: %v", err)
+		}
+		log.Printf("cache enabled: dir=%s ttl=%s", cacheRoot, cacheTTL)
+		cache.RunCleaner(context.Background(), cacheRoot, cacheTTL, time.Hour)
+	}
 
-	reg := proxy.NewRegistry(m)
+	reg := proxy.NewRegistry(m, cacheRoot, cacheTTL)
 	srv := &http.Server{
 		Addr:    *listen,
 		Handler: reg,
@@ -73,6 +104,10 @@ Example config.yaml:
       upstream: https://registry-1.docker.io
     - host: ghcr.example.com
       upstream: https://ghcr.io
+  cache:
+    enabled: true
+    dir: ./cache
+    ttl_days: 3
 
 Docker daemon (/etc/docker/daemon.json), using HTTP mirror on port 8080:
   {

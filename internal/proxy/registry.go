@@ -5,20 +5,28 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/Rehtt/docker-proxy/internal/cache"
 )
 
 type Registry struct {
 	mu         sync.RWMutex
 	routes     map[string]*url.URL
 	proxyCache map[string]*httputil.ReverseProxy
+	cacheDir   string
+	cacheTTL   time.Duration
 }
 
-func NewRegistry(routes map[string]*url.URL) *Registry {
+func NewRegistry(routes map[string]*url.URL, cacheDir string, cacheTTL time.Duration) *Registry {
 	return &Registry{
 		routes:     routes,
 		proxyCache: make(map[string]*httputil.ReverseProxy),
+		cacheDir:   cacheDir,
+		cacheTTL:   cacheTTL,
 	}
 }
 
@@ -26,6 +34,14 @@ func (r *Registry) SetRoutes(routes map[string]*url.URL) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.routes = routes
+	r.proxyCache = make(map[string]*httputil.ReverseProxy)
+}
+
+func (r *Registry) SetCache(dir string, ttl time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cacheDir = dir
+	r.cacheTTL = ttl
 	r.proxyCache = make(map[string]*httputil.ReverseProxy)
 }
 
@@ -58,12 +74,17 @@ func (r *Registry) reverseProxyFor(target *url.URL) *httputil.ReverseProxy {
 	if p, ok := r.proxyCache[key]; ok {
 		return p
 	}
-	p := newSingleHostReverseProxy(target)
+	p := r.newSingleHostReverseProxy(target)
 	r.proxyCache[key] = p
 	return p
 }
 
-func newSingleHostReverseProxy(target *url.URL) *httputil.ReverseProxy {
+func filepathJoinPerHost(root, host string) string {
+	h := strings.ReplaceAll(host, ":", "_")
+	return filepath.Join(root, h)
+}
+
+func (r *Registry) newSingleHostReverseProxy(target *url.URL) *httputil.ReverseProxy {
 	director := func(req *http.Request) {
 		req.URL.Scheme = target.Scheme
 		req.URL.Host = target.Host
@@ -72,12 +93,19 @@ func newSingleHostReverseProxy(target *url.URL) *httputil.ReverseProxy {
 			req.Header.Set("User-Agent", "")
 		}
 	}
-	tr := &http.Transport{
+	base := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},
 		ForceAttemptHTTP2: true,
+	}
+	var tr http.RoundTripper = base
+	if r.cacheDir != "" && r.cacheTTL > 0 {
+		tr = cache.NewTransport(base, cache.Options{
+			Dir: filepathJoinPerHost(r.cacheDir, target.Host),
+			TTL: r.cacheTTL,
+		})
 	}
 	return &httputil.ReverseProxy{
 		Director:       director,

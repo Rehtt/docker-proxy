@@ -10,3 +10,4 @@ services:
       - "8080:8080"
     volumes:
       - ./config.yaml:/etc/docker-proxy/config.yaml:ro
+      - ./cache:/cache # 需配合 config 中 cache.dir: /cache

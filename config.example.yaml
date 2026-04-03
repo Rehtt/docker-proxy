@@ -3,3 +3,8 @@ routes:
     upstream: https://registry-1.docker.io
   - host: ghcr.example.com
     upstream: https://ghcr.io
+
+cache:
+  enabled: true
+  dir: ./cache
+  ttl_days: 3
