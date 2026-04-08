@@ -3,6 +3,7 @@ package proxy
 import (
 	"crypto/tls"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -21,6 +22,13 @@ type Registry struct {
 	cacheDir   string
 	cacheTTL   time.Duration
 }
+
+const (
+	redirectProxyPrefix      = "/__docker_proxy_redirect__/"
+	hdrOriginalHost          = "X-Docker-Proxy-Original-Host"
+	hdrOriginalScheme        = "X-Docker-Proxy-Original-Scheme"
+	hdrOriginalForwardedProto = "X-Forwarded-Proto"
+)
 
 func NewRegistry(routes map[string]*url.URL, cacheDir string, cacheTTL time.Duration) *Registry {
 	return &Registry{
@@ -62,6 +70,13 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		http.Error(w, "unknown registry host", http.StatusBadGateway)
 		return
+	}
+	if proxyHost, proxyPath, ok := parseRedirectProxyPath(req.URL.Path); ok {
+		up = &url.URL{
+			Scheme: "https",
+			Host:   proxyHost,
+		}
+		req.URL.Path = proxyPath
 	}
 
 	proxy := r.reverseProxyFor(up)
@@ -160,9 +175,13 @@ func filepathJoinPerHost(root, host string) string {
 
 func (r *Registry) newSingleHostReverseProxy(target *url.URL) *httputil.ReverseProxy {
 	director := func(req *http.Request) {
+		originHost := req.Host
+		originScheme := originalScheme(req)
 		req.URL.Scheme = target.Scheme
 		req.URL.Host = target.Host
 		req.Host = target.Host
+		req.Header.Set(hdrOriginalHost, originHost)
+		req.Header.Set(hdrOriginalScheme, originScheme)
 		if _, ok := req.Header["User-Agent"]; !ok {
 			req.Header.Set("User-Agent", "")
 		}
@@ -196,5 +215,78 @@ func (r *Registry) newSingleHostReverseProxy(target *url.URL) *httputil.ReverseP
 }
 
 func rewriteRedirect(resp *http.Response) error {
+	loc := strings.TrimSpace(resp.Header.Get("Location"))
+	if loc == "" {
+		return nil
+	}
+	u, err := url.Parse(loc)
+	if err != nil || !u.IsAbs() || u.Host == "" {
+		return nil
+	}
+
+	originHost := strings.TrimSpace(resp.Request.Header.Get(hdrOriginalHost))
+	if originHost == "" {
+		return nil
+	}
+	originScheme := strings.TrimSpace(resp.Request.Header.Get(hdrOriginalScheme))
+	if originScheme == "" {
+		originScheme = "https"
+	}
+
+	escapedPath := strings.TrimPrefix(u.EscapedPath(), "/")
+	rewritten := &url.URL{
+		Scheme:   originScheme,
+		Host:     originHost,
+		Path:     redirectProxyPrefix + u.Host + "/" + escapedPath,
+		RawQuery: u.RawQuery,
+	}
+	resp.Header.Set("Location", rewritten.String())
 	return nil
+}
+
+func parseRedirectProxyPath(path string) (upstreamHost string, rewrittenPath string, ok bool) {
+	if !strings.HasPrefix(path, redirectProxyPrefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(path, redirectProxyPrefix)
+	slash := strings.IndexByte(rest, '/')
+	if slash <= 0 {
+		return "", "", false
+	}
+	host := rest[:slash]
+	if !isValidRedirectHost(host) {
+		return "", "", false
+	}
+	tail := rest[slash:]
+	if tail == "" {
+		tail = "/"
+	}
+	return host, tail, true
+}
+
+func isValidRedirectHost(host string) bool {
+	if host == "" || strings.Contains(host, "/") || strings.Contains(host, "://") {
+		return false
+	}
+	if h, p, err := net.SplitHostPort(host); err == nil {
+		if h == "" || p == "" {
+			return false
+		}
+		return true
+	}
+	return strings.Contains(host, ".")
+}
+
+func originalScheme(req *http.Request) string {
+	if xfp := strings.TrimSpace(req.Header.Get(hdrOriginalForwardedProto)); xfp != "" {
+		parts := strings.Split(xfp, ",")
+		first := strings.TrimSpace(parts[0])
+		if first != "" {
+			return first
+		}
+	}
+	if req.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
